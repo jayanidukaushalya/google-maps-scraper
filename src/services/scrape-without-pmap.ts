@@ -1,4 +1,3 @@
-import pMap from "p-map";
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import {
@@ -14,13 +13,12 @@ import logger from "../utils/logger.js";
 import generateRandomUserAgent from "./generate-random-user-agent.js";
 import processSearchResult from "./process-search-result.js";
 
-const scrape = async ({
+const scrapeWithoutPMap = async ({
   searchKey,
   coordinates,
   resultLimit = 10,
   email = false,
   socialLinks = false,
-  threadCount = 1,
 }: ScraperOptions): Promise<
   (SearchResult | null | undefined)[] | undefined
 > => {
@@ -40,8 +38,8 @@ const scrape = async ({
     const defaultTimeout =
       email || socialLinks ? DEFAULT_TIMEOUT * 2 : DEFAULT_TIMEOUT;
 
-    page.setDefaultNavigationTimeout(defaultTimeout * threadCount);
-    page.setDefaultTimeout(defaultTimeout * threadCount);
+    page.setDefaultNavigationTimeout(defaultTimeout);
+    page.setDefaultTimeout(defaultTimeout);
 
     await page.setUserAgent(generateRandomUserAgent());
 
@@ -78,7 +76,7 @@ const scrape = async ({
       email || socialLinks ? NETWORK_IDLE_TIMEOUT * 2 : NETWORK_IDLE_TIMEOUT;
 
     await page.waitForSelector('div[role="feed"]', {
-      timeout: idleTimeout * threadCount,
+      timeout: idleTimeout,
     });
 
     await autoScroll(page, resultLimit);
@@ -97,34 +95,26 @@ const scrape = async ({
 
     logger.info(`Found ${searchResultLinks.length} search result links`);
 
-    // Parallel processing of search results
-    const searchResultData = await pMap(
-      searchResultLinks,
-      async (link, index) => {
-        try {
-          const result = await processSearchResult(
-            page,
-            link,
-            email,
-            socialLinks
-          );
-          if (result) {
-            logger.info(`✅ Processed result ${index + 1}: ${result.title}`);
-          }
-          return result;
-        } catch (error) {
-          logger.error(
-            `🔍 Error processing search result ${index + 1}: `,
-            error
-          );
-          return null;
+    const searchResultData = [];
+
+    for (let index = 0; index < searchResultLinks.length; index++) {
+      const link = searchResultLinks[index];
+      try {
+        const result = await processSearchResult(
+          page,
+          link,
+          email,
+          socialLinks
+        );
+        if (result) {
+          logger.info(`✅ Processed result ${index + 1}: ${result.title}`);
         }
-      },
-      {
-        concurrency: threadCount,
-        stopOnError: false,
+        searchResultData.push(result);
+      } catch (error) {
+        logger.error(`🔍 Error processing search result ${index + 1}: `, error);
+        searchResultData.push(null);
       }
-    );
+    }
 
     return searchResultData;
   } catch (error) {
@@ -137,4 +127,4 @@ const scrape = async ({
   }
 };
 
-export default scrape;
+export default scrapeWithoutPMap;

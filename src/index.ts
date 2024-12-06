@@ -1,16 +1,23 @@
-import path from "path";
-import scrape from "./services/scrape.js";
-import logger from "./utils/logger.js";
 import fs from "fs/promises";
+import path from "path";
+import scrapeWithoutPMap from "./services/scrape-without-pmap.js";
+import logger from "./utils/logger.js";
 
 const runScraper = async () => {
   try {
-    const results = await scrape({
+    // const results = await scrape({
+    //   searchKey: "restaurants in Perth WA, Australia",
+    //   email: true,
+    //   socialLinks: true,
+    //   resultLimit: 20,
+    //   threadCount: 3,
+    // });
+
+    const results = await scrapeWithoutPMap({
       searchKey: "restaurants in Perth WA, Australia",
       email: true,
       socialLinks: true,
       resultLimit: 20,
-      threadCount: 3,
     });
 
     if (results) {

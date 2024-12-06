@@ -35,7 +35,7 @@ export const SOCIAL_PLATFORMS: SocialPlatform[] = [
 ];
 
 export const DEFAULT_TIMEOUT = 30 * 1000;
-export const NETWORK_IDLE_TIMEOUT = 60 * 1000;
+export const NETWORK_IDLE_TIMEOUT = 50 * 1000;
 
 export const RETRY_LIMIT = 3;
 

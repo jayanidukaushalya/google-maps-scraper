@@ -1,5 +1,7 @@
+import retry from "async-retry";
+import fs from "fs";
+import path from "path";
 import { Page } from "puppeteer";
-import { SearchResult, SocialLinks } from "../types.js";
 import {
   DEFAULT_TIMEOUT,
   EMAIL_REGEX,
@@ -7,11 +9,9 @@ import {
   RETRY_LIMIT,
   SOCIAL_PLATFORMS,
 } from "../constants.js";
-import retry from "async-retry";
-import logger from "../utils/logger.js";
+import { SearchResult, SocialLinks } from "../types.js";
 import { delay, waitSafely } from "../utils/index.js";
-import path from "path";
-import fs from "fs";
+import logger from "../utils/logger.js";
 
 const processSearchResult = async (
   page: Page,
@@ -24,18 +24,22 @@ const processSearchResult = async (
       try {
         await page.goto(link, {
           waitUntil: "networkidle0",
-          timeout: DEFAULT_TIMEOUT,
         });
 
         // Random delay to appear more human-like
         await delay(1000 + Math.random() * 1000);
 
         // More resilient selector waiting
+        const idleTimeout =
+          email || socialLinks
+            ? NETWORK_IDLE_TIMEOUT * 2
+            : NETWORK_IDLE_TIMEOUT;
+
         await Promise.race([
           page.waitForSelector('div[role="main"]', {
-            timeout: NETWORK_IDLE_TIMEOUT,
+            timeout: idleTimeout,
           }),
-          page.waitForSelector("body", { timeout: NETWORK_IDLE_TIMEOUT }),
+          page.waitForSelector("body", { timeout: idleTimeout }),
         ]);
 
         const result: SearchResult = await page.evaluate(() => {
@@ -91,7 +95,7 @@ const processSearchResult = async (
           };
         });
 
-        // More robust title validation
+        // robust title validation
         if (!result.title) {
           const screenshotsDir = path.resolve("debug_screenshots");
           if (!fs.existsSync(screenshotsDir)) {
@@ -109,88 +113,81 @@ const processSearchResult = async (
 
         // Website data extraction
         if (result.website && (email || socialLinks)) {
-          try {
-            await page.goto(result.website, {
-              waitUntil: ["networkidle0", "domcontentloaded"],
-              timeout: DEFAULT_TIMEOUT,
-            });
+          await page.goto(result.website, {
+            waitUntil: ["networkidle0", "domcontentloaded"],
+            timeout: DEFAULT_TIMEOUT,
+          });
 
-            // Allow dynamic content to load
-            await waitSafely(NETWORK_IDLE_TIMEOUT);
+          // Allow dynamic content to load
+          await waitSafely(1000 + Math.random() * 1000);
 
-            const extractedData = await page.evaluate(
-              (
-                emailOption,
-                socialLinksOption,
-                emailRegexSource,
-                platformSources
-              ) => {
-                const emailRegex = new RegExp(emailRegexSource, "i");
-                const platforms = platformSources.map((platform) => ({
-                  ...platform,
-                  regex: new RegExp(platform.regex, "i"),
-                }));
-
-                let matchedEmails: string[] = [];
-                let mailtoLinks: (string | undefined)[] = [];
-
-                if (emailOption) {
-                  const textContent = document.body.innerText;
-                  matchedEmails = RegExp(emailRegex).exec(textContent) ?? [];
-
-                  // Check for emails in "mailto:" links
-                  mailtoLinks = Array.from(
-                    document.querySelectorAll('a[href^="mailto:"]')
-                  ).map((link) =>
-                    link.getAttribute("href")?.replace("mailto:", "").trim()
-                  );
-                }
-
-                const socialLinks: SocialLinks = {};
-
-                if (socialLinksOption) {
-                  const anchorTags = Array.from(
-                    document.querySelectorAll<HTMLAnchorElement>("a[href]")
-                  );
-
-                  platforms.forEach((platform) => {
-                    const platformLinks = anchorTags
-                      .map(
-                        (anchor) => anchor.getAttribute("href")?.trim() ?? ""
-                      )
-                      .filter((href) => platform.regex.test(href));
-
-                    // Remove duplicate links
-                    const uniqueLinks = Array.from(new Set(platformLinks));
-
-                    if (uniqueLinks.length > 0) {
-                      socialLinks[platform.name] = platformLinks;
-                    }
-                  });
-                }
-
-                return {
-                  email: emailOption
-                    ? [...new Set([...matchedEmails, ...mailtoLinks])][0] ??
-                      null
-                    : undefined,
-                  socialLinks: socialLinksOption ? socialLinks : undefined,
-                };
-              },
-              email,
-              socialLinks,
-              EMAIL_REGEX.source,
-              SOCIAL_PLATFORMS.map((platform) => ({
+          const extractedData = await page.evaluate(
+            (
+              emailOption,
+              socialLinksOption,
+              emailRegexSource,
+              platformSources
+            ) => {
+              const emailRegex = new RegExp(emailRegexSource, "i");
+              const platforms = platformSources.map((platform) => ({
                 ...platform,
-                regex: platform.regex.source,
-              }))
-            );
+                regex: new RegExp(platform.regex, "i"),
+              }));
 
-            result.email = extractedData.email;
-            result.socialLinks = extractedData.socialLinks;
-          } catch (error) {
-            logger.warn(`Partial extraction from ${result.website}:`, error);
-          }
+              let matchedEmails: string[] = [];
+              let mailtoLinks: (string | undefined)[] = [];
+
+              if (emailOption) {
+                const textContent = document.body.innerText;
+                matchedEmails = RegExp(emailRegex).exec(textContent) ?? [];
+
+                // Check for emails in "mailto:" links
+                mailtoLinks = Array.from(
+                  document.querySelectorAll('a[href^="mailto:"]')
+                ).map((link) =>
+                  link.getAttribute("href")?.replace("mailto:", "").trim()
+                );
+              }
+
+              const socialLinks: SocialLinks = {};
+
+              if (socialLinksOption) {
+                const anchorTags = Array.from(
+                  document.querySelectorAll<HTMLAnchorElement>("a[href]")
+                );
+
+                platforms.forEach((platform) => {
+                  const platformLinks = anchorTags
+                    .map((anchor) => anchor.getAttribute("href")?.trim() ?? "")
+                    .filter((href) => platform.regex.test(href));
+
+                  // Remove duplicate links
+                  const uniqueLinks = Array.from(new Set(platformLinks));
+
+                  if (uniqueLinks.length > 0) {
+                    socialLinks[platform.name] = platformLinks;
+                  }
+                });
+              }
+
+              return {
+                email: emailOption
+                  ? [...new Set([...matchedEmails, ...mailtoLinks])][0] ?? null
+                  : undefined,
+                socialLinks: socialLinksOption ? socialLinks : undefined,
+              };
+            },
+            email,
+            socialLinks,
+            EMAIL_REGEX.source,
+            SOCIAL_PLATFORMS.map((platform) => ({
+              ...platform,
+              regex: platform.regex.source,
+            }))
+          );
+
+          result.email = extractedData.email;
+          result.socialLinks = extractedData.socialLinks;
         }
 
         return result;
@@ -199,12 +196,11 @@ const processSearchResult = async (
           if (error.message.includes("net::ERR_")) {
             logger.warn(`Network error for ${link}: ${error.message}`);
             throw error;
+          } else {
+            logger.warn(`Processing error for ${link}:`, error);
           }
-          logger.error(`Processing error for ${link}:`, error);
-          bail(error);
         } else {
-          logger.error("An unknown error occurred:", error);
-          bail(error);
+          logger.warn("An unknown error occurred:", error);
         }
       }
     },
@@ -213,13 +209,19 @@ const processSearchResult = async (
       factor: 2,
       minTimeout: DEFAULT_TIMEOUT,
       maxTimeout: NETWORK_IDLE_TIMEOUT,
-      onRetry: (error) => {
-        if (error instanceof Error) {
-          logger.warn(
-            `🔃 Retrying link ${link} due to error: ${error.message}`
-          );
+      onRetry: (error, attempt) => {
+        const remainingRetries = RETRY_LIMIT - attempt;
+
+        if (remainingRetries > 0) {
+          // Log a warning if retries are available
+          if (error instanceof Error) {
+            logger.warn(
+              `🔃 Retrying link ${link} due to error: ${error.message}. Retries left: ${remainingRetries}`
+            );
+          } else {
+            logger.warn(`🔃 Retrying link. Retries left: ${remainingRetries}`);
+          }
         }
-        logger.warn("🔃 Retrying link due to error");
       },
     }
   );
